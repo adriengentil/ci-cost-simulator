@@ -69,7 +69,6 @@ class OnDemandPool:
         self.name = name
         self.billing_period_sec = billing_period_sec
 
-        self.acquired = 0
         self.running_jobs = []
 
         self.usage_sum = 0
@@ -79,7 +78,6 @@ class OnDemandPool:
         self.acquired_samples = []
 
     def acquire(self, job):
-        self.acquired = self.acquired + 1
         self.billed_time_sec_total = (
             self.billed_time_sec_total
             + (int((job.end - job.start) / self.billing_period_sec) + 1)
@@ -90,15 +88,14 @@ class OnDemandPool:
 
     def release(self, job):
         if job in self.running_jobs:
-            self.acquired = self.acquired - 1
             self.running_jobs.remove(job)
             return True
         return False
 
     def observe(self):
-        self.usage_sum = self.usage_sum + self.acquired
+        self.usage_sum = self.usage_sum + len(self.running_jobs)
         self.sample_count = self.sample_count + 1
-        self.acquired_samples.append(self.acquired)
+        self.acquired_samples.append(len(self.running_jobs))
 
     def usage(self):
         return self.usage_sum / self.sample_count
@@ -149,7 +146,13 @@ def parse_data_into_jobs(filename):
             raw_id = raw_job[0]
             raw_duration = raw_job[1]
             raw_start = raw_job[2]
+            raw_status = raw_job[4]
             raw_name = raw_job[5]
+
+            if int(float(raw_duration)) == 0:
+                continue
+            if raw_status != "SUCCESS" and raw_status != "FAILURE":
+                continue
 
             try:
                 start = datetime.strptime(
@@ -190,7 +193,7 @@ def plot_poolsize_billed_time(
     )
     plt.bar(X + 0.25, np.array(billed_time_sized_pool) / 3600, color="g", width=0.25)
     plt.bar(X + 0.50, billed_time_total / 3600, color="r", width=0.25)
-    plt.legend(labels=["OnDemand", "SizedPool", "Total"], fontsize="x-small")
+    plt.legend(labels=["OnDemand", "SizedPool", "Total"], fontsize=4, ncol=3)
     plt.xlabel("Pool size")
     plt.ylabel("Billed time (hrs)")
 
@@ -210,7 +213,7 @@ def plot_poolsize_billed_time(
     plt.bar(X + 0.00, billed_time_on_demand_pool_225, color="b", width=0.25)
     plt.bar(X + 0.25, billed_time_sized_pool_75, color="g", width=0.25)
     plt.bar(X + 0.50, billed_time_total_75, color="r", width=0.25)
-    plt.legend(labels=["OnDemand", "SizedPool", "Total"], fontsize="x-small")
+    plt.legend(labels=["OnDemand", "SizedPool", "Total"], fontsize=4, ncol=3)
     plt.xlabel("Pool size")
     plt.ylabel("Cost")
 
@@ -229,7 +232,7 @@ def plot_poolsize_billed_time(
     plt.bar(X + 0.00, billed_time_on_demand_pool_225, color="b", width=0.25)
     plt.bar(X + 0.25, billed_time_sized_pool_15, color="g", width=0.25)
     plt.bar(X + 0.50, billed_time_total_15, color="r", width=0.25)
-    plt.legend(labels=["OnDemand", "SizedPool", "Total"], fontsize="x-small")
+    plt.legend(labels=["OnDemand", "SizedPool", "Total"], fontsize=4, ncol=3)
     plt.xlabel("Pool size")
     plt.ylabel("Cost")
     plt.tight_layout()
@@ -279,6 +282,7 @@ def plot_pool_usage(on_demand_pool, sized_pool, billing_period):
     plt.xlabel("Samples")
     plt.ylabel(f"Acquired machines")
     plt.savefig(f"usage_{sized_pool.max_available}_{billing_period}.png", dpi=300)
+    plt.close()
 
 
 def dump_poolsize_billed_time(
@@ -328,7 +332,7 @@ def main():
             print(f"Simulate pool_size={pool_size} billing_period={billing_period}")
             simulate(event_list, pool_list, sample_period)
 
-            # plot_pool_usage(on_demand_pool, sized_pool, billing_period)
+            plot_pool_usage(on_demand_pool, sized_pool, billing_period)
 
             billed_time_on_demand_pool.append(on_demand_pool.billed_time_sec_total)
             billed_time_sized_pool.append(sized_pool.billed_time_sec_total)
