@@ -8,13 +8,16 @@ import numpy as np
 
 from event import ACQUIRE_INSTANCE_ACTION, Event
 
-
 class SizedPool:
+    # Define how much time an instance can be reused after it got released
+    CLEANING_TIME = 20 * 60
+
     def __init__(self, name, max_size, time_period_sec, billing_period_sec):
         self.name = name
         self.max_available = max_size
         self.billing_period_sec = billing_period_sec
         self.running_jobs = []
+        self.cleaning_until = []
         self.sample_count = 0
         self.usage_sum = 0
         self.acquired_samples = []
@@ -25,7 +28,10 @@ class SizedPool:
         )
 
     def acquire(self, event: Event) -> bool:
-        if len(self.running_jobs) == self.max_available:
+        # remove instances done with cleaning
+        self.cleaning_until = [c for c in self.cleaning_until if c > event.timestamp]
+
+        if (len(self.running_jobs) + len(self.cleaning_until)) == self.max_available:
             return False
         else:
             self.running_jobs.append(event.job)
@@ -34,6 +40,7 @@ class SizedPool:
     def release(self, event: Event) -> bool:
         if event.job in self.running_jobs:
             self.running_jobs.remove(event.job)
+            self.cleaning_until.append(event.timestamp + self.CLEANING_TIME)
             return True
         return False
 
