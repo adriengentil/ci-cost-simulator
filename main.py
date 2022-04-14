@@ -1,30 +1,12 @@
 import csv
-from datetime import datetime, timedelta
-from enum import Enum
-from time import time
-from turtle import width
+import json
+import sys
+from datetime import timedelta
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-
-class Job:
-    def __init__(self, name, start, end):
-        self.name = name
-        self.start = start
-        self.end = end
-
-
-class Event:
-    def __init__(self, timestamp, action, job):
-        self.timestamp = timestamp
-        self.action = action
-        self.job = job
-
-
-class Action(Enum):
-    ACQUIRE_INSTANCE = "ACQUIRE"
-    RELEASE_INSTANCE = "RELEASE"
+from event import ACQUIRE_INSTANCE_ACTION, Event
 
 
 class SizedPool:
@@ -42,16 +24,16 @@ class SizedPool:
             * billing_period_sec
         )
 
-    def acquire(self, job):
+    def acquire(self, event: Event) -> bool:
         if len(self.running_jobs) == self.max_available:
             return False
         else:
-            self.running_jobs.append(job)
+            self.running_jobs.append(event.job)
             return True
 
-    def release(self, job):
-        if job in self.running_jobs:
-            self.running_jobs.remove(job)
+    def release(self, event: Event) -> bool:
+        if event.job in self.running_jobs:
+            self.running_jobs.remove(event.job)
             return True
         return False
 
@@ -77,20 +59,34 @@ class OnDemandPool:
 
         self.acquired_samples = []
 
-    def acquire(self, job):
-        self.billed_time_sec_total = (
-            self.billed_time_sec_total
-            + (int((job.end - job.start) / self.billing_period_sec) + 1)
-            * self.billing_period_sec
-        )
-        self.running_jobs.append(job)
+    def acquire(self, event):
+        self.running_jobs.append(event)
         return True
 
-    def release(self, job):
-        if job in self.running_jobs:
-            self.running_jobs.remove(job)
-            return True
-        return False
+    def release(self, event: Event) -> bool:
+        acquired_event = None
+        for e in self.running_jobs:
+            if e.job == event.job:
+                acquired_event = e
+                break
+
+        if not acquired_event:
+            return False
+
+        self.billed_time_sec_total = (
+            self.billed_time_sec_total
+            + (
+                int(
+                    (event.timestamp - acquired_event.timestamp)
+                    / self.billing_period_sec
+                )
+                + 1
+            )
+            * self.billing_period_sec
+        )
+
+        self.running_jobs.remove(acquired_event)
+        return True
 
     def observe(self):
         self.usage_sum = self.usage_sum + len(self.running_jobs)
@@ -99,16 +95,6 @@ class OnDemandPool:
 
     def usage(self):
         return self.usage_sum / self.sample_count
-
-
-def event_list_from_job_list(job_list):
-    event_list = []
-    for job in job_list:
-        event_list.append(Event(job.start, Action.ACQUIRE_INSTANCE, job))
-        event_list.append(Event(job.end, Action.RELEASE_INSTANCE, job))
-    event_list.sort(key=lambda x: x.timestamp)
-
-    return event_list
 
 
 def observe_pools(pool_list):
@@ -125,52 +111,14 @@ def simulate(event_list, pool_list, sample_period):
             observe_pools(pool_list)
         sample_count = sample_count_from_start
 
-        # print(
-        #     "{} - job {} to be {}".format(event.timestamp, event.job.name, event.action)
-        # )
         for pool in pool_list:
-            if event.action == Action.ACQUIRE_INSTANCE:
-                success = pool.acquire(event.job)
+            if event.action == ACQUIRE_INSTANCE_ACTION:
+                success = pool.acquire(event)
             else:
-                success = pool.release(event.job)
+                success = pool.release(event)
 
             if success:
                 break
-
-
-def parse_data_into_jobs(filename):
-    job_list = []
-    with open(filename, newline="") as csvfile:
-        raw_jobs = csv.reader(csvfile)
-        for raw_job in raw_jobs:
-            raw_id = raw_job[0]
-            raw_duration = raw_job[1]
-            raw_start = raw_job[2]
-            raw_status = raw_job[4]
-            raw_name = raw_job[5]
-
-            if int(float(raw_duration)) == 0:
-                continue
-            if raw_status != "SUCCESS" and raw_status != "FAILURE":
-                continue
-
-            try:
-                start = datetime.strptime(
-                    raw_start, "%Y-%m-%dT%H:%M:%S%z"
-                )  # 2022-01-18T08:00:48Z
-            except:
-                print(f"failled to parse date {raw_start} for job id {raw_id}")
-                raise
-            start_seconds = start.timestamp()
-            job_list.append(
-                Job(
-                    f"{raw_name}-{raw_id}",
-                    start_seconds,
-                    start_seconds + float(raw_duration),
-                )
-            )
-
-    return job_list
 
 
 def plot_poolsize_billed_time(
@@ -199,39 +147,39 @@ def plot_poolsize_billed_time(
 
     plt.subplot(3, 1, 2)
     billed_time_on_demand_pool_225 = np.array(billed_time_on_demand_pool) / 3600 * 2.25
-    billed_time_sized_pool_75 = np.array(billed_time_sized_pool) / 3600 * 2.082
-    billed_time_total_75 = np.add(
-        billed_time_on_demand_pool_225, billed_time_sized_pool_75
+    billed_time_sized_pool_25 = np.array(billed_time_sized_pool) / 3600 * 1.6875
+    billed_time_total_25 = np.add(
+        billed_time_on_demand_pool_225, billed_time_sized_pool_25
     )
     plt.title(
-        f"Cost per pool size, OnDemand=2.25$, SizedPool=2.082$ (7.5% discount) billling period={billing_period}s",
+        f"Cost per pool size, OnDemand=2.25, SizedPool=1.6875 (25% discount) billling period={billing_period}s",
         fontsize="x-small",
     )
     plt.grid(axis="y", color="gray", linestyle="dashed", linewidth=0.25)
-    plt.yticks(np.arange(0, billed_time_total_75.max(), 5000), fontsize=4)
+    plt.yticks(np.arange(0, billed_time_total_25.max(), 5000), fontsize=4)
     plt.xticks(pool_size_matrix, fontsize=4)
     plt.bar(X + 0.00, billed_time_on_demand_pool_225, color="b", width=0.25)
-    plt.bar(X + 0.25, billed_time_sized_pool_75, color="g", width=0.25)
-    plt.bar(X + 0.50, billed_time_total_75, color="r", width=0.25)
+    plt.bar(X + 0.25, billed_time_sized_pool_25, color="g", width=0.25)
+    plt.bar(X + 0.50, billed_time_total_25, color="r", width=0.25)
     plt.legend(labels=["OnDemand", "SizedPool", "Total"], fontsize=4, ncol=3)
     plt.xlabel("Pool size")
     plt.ylabel("Cost")
 
     plt.subplot(3, 1, 3)
-    billed_time_sized_pool_15 = np.array(billed_time_sized_pool) / 3600 * 1.91
-    billed_time_total_15 = np.add(
-        billed_time_on_demand_pool_225, billed_time_sized_pool_15
+    billed_time_sized_pool_50 = np.array(billed_time_sized_pool) / 3600 * 1.125
+    billed_time_total_50 = np.add(
+        billed_time_on_demand_pool_225, billed_time_sized_pool_50
     )
     plt.title(
-        f"Cost per pool size, OnDemand=2.25$, SizedPool=1.91$ (15% discount) billling period={billing_period}s",
+        f"Cost per pool size, OnDemand=2.25, SizedPool=1.125 (50% discount) billling period={billing_period}s",
         fontsize="x-small",
     )
     plt.grid(axis="y", color="gray", linestyle="dashed", linewidth=0.25)
-    plt.yticks(np.arange(0, billed_time_total_15.max(), 5000), fontsize=4)
+    plt.yticks(np.arange(0, billed_time_total_50.max(), 5000), fontsize=4)
     plt.xticks(pool_size_matrix, fontsize=4)
     plt.bar(X + 0.00, billed_time_on_demand_pool_225, color="b", width=0.25)
-    plt.bar(X + 0.25, billed_time_sized_pool_15, color="g", width=0.25)
-    plt.bar(X + 0.50, billed_time_total_15, color="r", width=0.25)
+    plt.bar(X + 0.25, billed_time_sized_pool_50, color="g", width=0.25)
+    plt.bar(X + 0.50, billed_time_total_50, color="r", width=0.25)
     plt.legend(labels=["OnDemand", "SizedPool", "Total"], fontsize=4, ncol=3)
     plt.xlabel("Pool size")
     plt.ylabel("Cost")
@@ -295,9 +243,13 @@ def dump_poolsize_billed_time(
 
 
 def main():
-    filename = "output.csv"
-    job_list = parse_data_into_jobs(filename)
-    event_list = event_list_from_job_list(job_list)
+    # filename = "output.csv"
+    # job_list = parse_data_into_jobs(filename)
+    # event_list = event_list_from_job_list(job_list)
+    event_file = sys.argv[1]
+    with open(event_file) as json_file:
+        event_list = json.load(json_file, object_hook=lambda d: Event(**d))
+    event_list.sort(key=lambda x: x.timestamp)
     simulation_duration_sec = event_list[-1].timestamp - event_list[0].timestamp
     print(
         "Simulation duration: {} -> {}s".format(
