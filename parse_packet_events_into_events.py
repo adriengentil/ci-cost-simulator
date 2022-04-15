@@ -32,7 +32,6 @@ def keep_action_pairs(event_list):
                 )
             )
         ):
-            print(f"{k} is not a valid pair of events len={len(pair)}")
             del action_pairs[k]
 
     clean_events = []
@@ -50,8 +49,6 @@ def dedup_event_ids(event_list):
         if e["id"] not in seen_event_ids:
             seen_event_ids.add(e["id"])
             dedup_events.append(e)
-        else:
-            print(e["id"])
 
     return dedup_events
 
